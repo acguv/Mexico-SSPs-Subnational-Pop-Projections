@@ -1,0 +1,461 @@
+---
+title: "CDM Multi-State Population Projection Model"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Packages
+```{r, R.options = options(readr.show_progress = F)}
+
+# Tidyverse and data.table for data wrangling
+if (!requireNamespace("tidyverse", quietly = T))  install.packages('tidyverse')
+if (!requireNamespace("data.table", quietly = T)) install.packages('data.table')
+
+library(tidyverse)
+library(data.table)
+
+
+# Load the ancillary functions
+ancillary_functions <- file.path('scripts', 'R', 'ancillary_functions')
+
+for (cur_file in list.files(ancillary_functions, full.names = T)) 
+  source(cur_file)
+
+```
+
+
+# Input Data
+Here we set some input parameters for the model. These inputs are:
+
+* Country for which we are going to do sub-national projections
+* Two UN life tables to adjust scenario-based mortality estimates
+* A factor indicating whether or not internal migrations is applied
+* A factor indicating whether or not international migrations is applied
+* Current scenario
+* Base year of projections
+* Last year of projections
+* Number of age groups
+
+```{r}
+# Inputs and Paths 
+
+# Path to state-level inputs folder
+cur_country <- "Mexico"
+inputs_path  <- file.path('inputs')
+outputs_path <- file.path('outputs')
+
+
+# UN standard life table e0=30; used for linear interpolation of lx values
+un_mortality_30_path <- file.path(inputs_path, 'AllRegions_mortality_UNe030.csv') 
+
+
+# UN standard life table e0=100; used for linear interpolation of lx values
+un_mortality_100_path <- file.path(inputs_path, 'AllRegions_mortality_UNe0100.csv')
+
+
+# Specify regions
+regions <- list.dirs(inputs_path, recursive = F, full.names = F)
+
+
+# Specify scenario
+cur_scenario <- 'constant_rates_ent'
+
+
+# Enter time and age related parameters
+start_year      <- 2020               
+end_year        <- 2100                
+steps           <- end_year - start_year 
+num_ages        <- 101
+intl_mig_factor <- 1 
+int_mig_factor  <- 1 
+
+
+# Path to results folder 
+results_path <- file.path(outputs_path, cur_scenario)
+
+if (!dir.exists(results_path)) {
+  
+  dir.create(results_path)
+} else {
+  
+  print('The results folder already exists!')
+}
+```
+
+
+# Main Program
+
+List all regions. In this case, Mexico's states.
+
+```{r}
+# Specify regions
+regions <- list.dirs(inputs_path, recursive = F, full.names = F)
+print(regions)
+```
+
+## Base year population
+We first create a data frame that will store population outcomes for all states.
+
+```{r}
+# A data table to hold base year population values before applying migration
+tot_base_pop_df <- data.table()
+
+
+# A data frame to hold population values updated by domestic and international migration
+tot_base_upd_pop_df <- data.table()
+```
+
+
+## International migration
+In this section, we update the base year population with migration.
+We use the state of **Baja California** as an example, and start with 
+international migration.
+
+```{r, echo=FALSE}
+region <- regions[2]
+print(str_c('region = ', region))
+```
+*First*, we load the base year population data from the input file.
+
+```{r}
+cur_inputs_path <- file.path(inputs_path, region)
+
+# Base Population data
+base_pop_df  <- file.path(cur_inputs_path, 'pop_ent.csv') %>%
+  fread() %>%
+  .[, Age := as.numeric(str_sub(Age, 1, 3))]
+
+head(base_pop_df)
+```
+
+*Second*, we apply the **derive_intl_mig** function to estimate international
+migration for this state. This function uses the total international migration
+count and then apply it to each age and gender based on the age and gender 
+profile of the international migration.
+
+```{r}
+intl_mig_df <- derive_intl_mig(cur_inputs_path, start_year, 
+                               base_pop_df, intl_mig_factor,
+                               cur_scenario)
+head(intl_mig_df)
+```
+
+*Finally*, we add apply net international migrants to base year population data.
+
+```{r}
+base_pop_int_mig_df <- base_pop_df[intl_mig_df, 
+                                   .(Race, Sex, Age, 
+                                     Population = Population + net_intl_mig),
+                                   on = c('Race', 'Sex', 'Age')]
+
+head(base_pop_int_mig_df)
+```
+Now that we know how the process works for one state, we repeat it for all 
+states.
+
+```{r}
+for (region in regions){
+  
+  cur_inputs_path <- file.path(inputs_path, region) 
+  
+  
+  # Base Population data
+  base_pop_df  <- file.path(cur_inputs_path, 'pop_ent.csv') %>%
+    fread() %>%
+    .[, Age := as.numeric(str_sub(Age, 1, 3))] 
+  
+  
+  
+  # Derive international migration values
+  intl_mig_df <- derive_intl_mig(cur_inputs_path, start_year, 
+                                 base_pop_df, intl_mig_factor,
+                                 cur_scenario)
+  
+
+  
+  # Update initial population data frame with international migration values
+  base_pop_int_mig_df <- base_pop_df[intl_mig_df, 
+                                     .(Race, Sex, Age, 
+                                       Population = Population + net_intl_mig),
+                                     on = c('Race', 'Sex', 'Age')]
+  
+  base_pop_int_mig_df <- data.table(Region = region, base_pop_int_mig_df)
+  
+  
+  
+  base_pop_df         <- data.table(Region = region, base_pop_df)
+  tot_base_pop_df     <- rbind(tot_base_pop_df, base_pop_df)
+  tot_base_upd_pop_df <- rbind(tot_base_upd_pop_df, base_pop_int_mig_df)
+}
+```
+
+Therefore, we have two population data frames, one containing the base year 
+population (**tot_base_pop_df**) and the other base year population data frame
+updated with the international migration (**tot_base_upd_pop_df**).
+
+```{r}
+head(tot_base_pop_df)
+```
+
+```{r}
+head(tot_base_upd_pop_df)
+```
+
+## Internal migration
+After applying the international migration to all states, we use two functions
+to estimate internal in-migration and internal out-migration for all states using
+bilateral migration rates between states. These functions  produce a list of two
+outputs:
+
+* Internal in and out migration for each state
+* Internal in and out migration between pairs of states
+
+```{r}
+# Calculate the total in out and net migration numbers for all states
+internal_in_migration_df  <- derive_int_in_migration(inputs_path, start_year, 
+                                                     tot_base_upd_pop_df, cur_scenario)
+
+internal_out_migration_df <- derive_int_out_migration(inputs_path, start_year, 
+                                                      tot_base_upd_pop_df, cur_scenario)
+
+```
+
+Net internal migration is the difference between the two.
+
+```{r}
+# People entered a state minus those who left
+in_migration_df  <- internal_in_migration_df$total_inmigration
+out_migration_df <- internal_out_migration_df$total_outmigration
+net_migration_df <- in_migration_df[out_migration_df, .(Region, Race, Sex, Age,
+                                                        int_in_mig, int_out_mig,
+                                                        int_net_mig = int_in_mig - int_out_mig),
+                                                        on = c('Destination' = 'Region',
+                                                               'Race', 'Sex', 'Age')]
+
+head(net_migration_df)
+```
+
+The sum of internal migration should be 0 or very close to it.
+```{r}
+print(sum(net_migration_df$int_net_mig))
+```
+
+Finally, we apply net internal migration for all states to their population 
+updated by the international migration.
+
+```{r}
+# Apply internal migration to base year population
+tot_base_upd_pop_df <- tot_base_upd_pop_df[, Region := str_split_i(Region, '-', 2)]
+tot_base_upd_pop_df <- tot_base_upd_pop_df[net_migration_df, 
+                                           .(Region, Race, Sex, Age, int_net_mig,
+                                           Population = Population + int_net_mig),
+                                           on = c('Region', 'Race', 'Sex', 'Age')]
+
+tot_base_upd_pop_df <- data.table(Year = start_year, tot_base_upd_pop_df)
+
+head(tot_base_upd_pop_df)
+```
+
+The functions also calculate the number of migrants between states. Below is the 
+example for Baja California.
+
+# Number of migrations from **BC** to other states. 
+```{r}
+pair_out_migrations   <- internal_out_migration_df$region_pair_outmigration
+BC_pair_out_migration <- pair_out_migrations[Region == 'BC']
+
+head(BC_pair_out_migration, 5)
+```
+
+# Number of migrations to **BC** from other states. 
+```{r}
+pair_in_migrations   <- internal_in_migration_df$region_pair_inmigration
+BC_pair_in_migration <- pair_in_migrations[Destination == 'BC']
+
+head(BC_pair_in_migration, 5)
+```
+
+## Fertility
+For each state, We modify total fertility rate (TFR) based on the scenario and 
+then derive age specific fertility rates. The resulting data frame contains 
+fetility rates for all states from 2020 to 2100.
+```{r}
+fertility_df <- estimate_fertility(regions, inputs_path, cur_scenario, start_year,
+                                   end_year)
+head(fertility_df)
+```
+
+## Mortality
+Mortality estimation based on the scenario for all states. They are derived for
+age, gender and each projection year.
+Three important variables from the resulting data frame are:
+
+* Sx: survival ratios 
+* lx: Number of individuals surviving to the beginning of a given age interval
+* Lx: Person-years lived by the cohort within a particular age interval 
+```{r}
+mortality_df <- estimate_mortality(regions, inputs_path, cur_scenario, start_year, 
+                                   end_year, un_mortality_30_path, 
+                                   un_mortality_100_path)
+head(mortality_df)
+```
+
+```{r}
+print(dim(tot_survival_df))
+```
+
+
+```{r}
+print(head(tot_survival_df, 5))
+```
+
+```{r}
+print(head(tot_lx_df, 5))
+```
+
+```{r}
+print(head(tot_Lx_df, 5))
+```
+
+
+Scenario-based age-specific Fertility rates for all states for each projection year (0:2015, 85:2100).
+```{r}
+tot_fert_df <- fertility_estimator(regions, inputsPath, cur_scenario, yearStart,
+                                   yearEnd, use_brass = T)
+```
+```{r}
+print(dim(tot_fert_df))
+```
+
+```{r}
+print(head(tot_fert_df, 20))
+```
+
+
+# Population Projection
+```{r}
+t <- 1
+print(paste("Current Year is", yearStart + t))
+```
+
+We first initialize the projection results data-frame for the current year
+```{r}
+pop_projections_df <- data.frame(matrix(0, nrow = nrow(upd_all_base_pop), 
+                                           ncol = length(regions)))
+
+colnames(pop_projections_df) <- regions
+
+head(pop_projections_df)
+```
+
+
+Read the scenario file for the current state.
+```{r}
+cur_region <- '03-BCS'
+region_num <- which(regions == cur_region)
+
+pathIn <- file.path(inputsPath, regions[region_num])
+
+
+# Scenario data
+scenario_df <- file.path(pathIn, paste0(cur_scenario, ".csv")) %>%
+  read.csv(check.names = F, stringsAsFactors = F)  
+
+print(head(scenario_df))
+```
+
+
+Using the scenario-informed sexual ratio at birth, we derive proportions of males
+and females. Currently, there is no differentiation between urban and rural.
+
+```{r}
+# Note: This generates a data frame with a "year" and "sr" column
+srDf1U <- data.frame(year = 0:steps, sr = scenario_df$sr_U) # urban
+srDf1R <- data.frame(year = 0:steps, sr = scenario_df$sr_R) # rural
+
+
+# Compute Proportion male and females at birth according to the scenario
+# Urban
+srDf1U$propM <- (srDf1U$sr / 100) / (1 + (srDf1U$sr / 100))
+srDf1U$propF <- 1 - srDf1U$propM
+
+# Rural
+srDf1R$propM <- (srDf1R$sr / 100) / (1 + (srDf1R$sr / 100))
+srDf1R$propF <- 1 - srDf1R$propM
+```
+
+```{r}
+print(head(srDf1U))
+```
+
+
+Extract the fertility, survival ratio, lx, and LX (life table components) data-frames for the current state. 0 means 2015, 1 means 2016, etc. F:Females, M:Males 
+U: Urban, R: Rural
+```{r}
+fertility_df <- tot_fert_df[seq(1 + (region_num - 1) * num_ages, region_num * num_ages), ]
+survival_df  <- tot_survival_df[seq(1 + (region_num - 1) * num_ages, region_num * num_ages), ]
+lx_df        <- tot_lx_df[seq(1 + (region_num - 1) * num_ages, region_num * num_ages), ]
+Lx_df        <- tot_Lx_df[seq(1 + (region_num - 1) * num_ages, region_num * num_ages), ]
+
+print(head(survival_df))
+```
+
+Derive female and male birth rates. This is derived by sex ratio, survival values and
+fertility rates.
+```{r}
+mBxF <- f.lBx2(fertility_df, srDf1R, srDf1U, Lx_df, lx_df, survival_df, t, "F")  
+mBxM <- f.lBx2(fertility_df, srDf1R, srDf1U, Lx_df, lx_df, survival_df, t, "M") 
+```
+
+
+
+```{r}
+# Generate transition matrix
+# Diagonal matrix pieces of Survival
+# Note: for the matrix computation step of the projection it is necessary that the transition matrix is quadratic
+# in this case it is necessary to add two "0" value columns to account for the merge of the Bx and Sx matrices
+# use bdiag() function from Matrix package to construct a block diagonal matrix
+mSxFd <- cbind(diag(c(rbind(survival_df[1:(num_ages-1), str_c("SxFU", t-1)],
+                            survival_df[1:(num_ages-1), str_c("SxFR", t-1)])), 
+                    2*(num_ages-1), 2 * (num_ages-1)), 0, 0)
+
+mSxMd <- cbind(diag(c(rbind(survival_df[1:(num_ages-1), str_c("SxMU", t-1)],
+                            survival_df[1:(num_ages-1), str_c("SxMR", t-1)])), 
+                    2*(num_ages-1), 2 * (num_ages-1)), 0, 0)
+
+
+# Horizontal matrix pieces of Birth rates
+mBxFd <- mBxF$Bx2   # females
+mBxMd <- mBxM$Bx2   # males
+
+
+
+# Generate quadrant pieces of transition matrix
+# female births + female survival
+mat11 <- rbind(mBxFd, mSxFd)   
+# no values
+mat12 <- matrix(0, nrow = nrow(mat11), ncol = ncol(mat11))
+# male births -> the new born boys are now computed based on the population of reproductive females
+mat21 <- rbind(mBxMd, matrix(0, nrow = (nrow(mat11) - nrow(mBxMd)), ncol = ncol(mat11))) 
+# male survival
+mat22 <- rbind(matrix(0, nrow = (nrow(mat11) - nrow(mSxMd)), ncol = ncol(mat11)), mSxMd) 
+
+
+# Combine quadrant pieces to complete matrix
+transition_matrix <- rbind(cbind(mat11, mat12), cbind(mat21, mat22))
+transition_matrix[is.na(transition_matrix)]       <- 0 # re-code all "NaN" values to 0
+transition_matrix[is.infinite(transition_matrix)] <- 0 # re-codes all Inf and -Inf values to 0
+
+
+pop_projections_df[, cur_region] <- transition_matrix%*%as.matrix(upd_all_base_pop[, cur_region])
+```
+
+
+This is the population projection in 2016 for **Baja California** after applying fertility, mortality and migration.
+```{r}
+head(pop_projections_df)
+```
+
+
+
