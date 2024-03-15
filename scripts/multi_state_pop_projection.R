@@ -1,7 +1,7 @@
 `
 # Header ------------------------------------------------------------------
 
-# Author:     Hamidreza Zoraghein
+# Author:     
 # Date:       2023-10-01
 # Purpose:    Multi-state population projection for NYC.
 

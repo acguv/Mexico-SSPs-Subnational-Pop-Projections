@@ -1,7 +1,7 @@
 
 # Script Header -----------------------------------------------------------
 
-# Author : Hamidreza Zoraghein
+# Author : 
 # Purpose: Create population pyramids based on the region, scenario and year
 # Date   : 02/11/2024 (modified)
 

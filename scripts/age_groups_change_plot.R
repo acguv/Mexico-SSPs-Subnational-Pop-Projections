@@ -1,7 +1,7 @@
 
 # Script Header -----------------------------------------------------------
 
-# Author : Hamidreza Zoraghein
+# Author : 
 # Purpose: Create plots of population changes for different age groups 
 # Date   : 02/11/2024 (modified)
 

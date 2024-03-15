@@ -1,7 +1,7 @@
 
 # Header -------------------------------------------------------------
 
-# Author : Hamidreza Zoraghein
+# Author : 
 # Purpose: Create bilateral accumulated internal migration maps 
 # Date   : 2/24/2023
 

@@ -1,7 +1,7 @@
 
 # Header ------------------------------------------------------------------
 
-# Author:     Hamidreza Zoraghein
+# Author:     
 # Date:       2020-11-20 
 # Purpose:    Visualization of contributing factors to U.S. state-level population
 #             change including fertility/mortality, international migration, 

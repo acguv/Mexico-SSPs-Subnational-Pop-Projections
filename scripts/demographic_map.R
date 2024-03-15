@@ -2,7 +2,7 @@
 # Header ------------------------------------------------------------------
 
 # Purpose: Generate socioeconomic projection maps for Mexico at the state level
-# Author:  Hamidreza Zoraghein
+# Author:  
 # Date:    11/29/2021
 
 rm(list = ls())

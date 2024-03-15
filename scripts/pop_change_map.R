@@ -2,7 +2,7 @@
 # Header ------------------------------------------------------------------
 
 # Purpose: Visualize population change for Mexico over 2020-2100
-# Author:  Hamidreza Zoraghein
+# Author:  
 # Date:    03/07/2024
 
 
